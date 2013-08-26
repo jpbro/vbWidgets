@@ -1389,9 +1389,9 @@ Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long
 End Sub
 
 Friend Property Get CaretPos() As Long
-  CaretPos = m_CaretPos
+  CaretPos = mCaretPos
 End Property
 
 Private Property Let CaretPos(ByVal Pos As Long)
-  m_CaretPos = Pos
+  mCaretPos = Pos
 End Property
