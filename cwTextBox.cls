@@ -657,9 +657,9 @@ Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean, Optional ByVal UndoA
   If mSelLength = 0 Then
     If ToTheLeft And mSelStart > 0 Then
       If Mid$(mText, mSelStart, 1) = vbLf Then
-        SetSelection mSelStart - 2, 2
+        SetSelection mSelStart - 2, 2, , False
       Else
-        SetSelection mSelStart - 1, 1
+        SetSelection mSelStart - 1, 1, , False
       End If
     ElseIf Not ToTheLeft And mSelStart < Len(mText) Then
       If Mid$(mText, mSelStart + 1, 1) = vbCr Then mSelLength = 2 Else mSelLength = 1
@@ -679,7 +679,11 @@ Private Sub MoveCursor(ByVal Offs&, Optional ByVal MoveType As eMoveCursorType =
   Dim FoundNonWhitespace As Boolean
   Dim SkipSelection As Boolean
   
-  If Offs = 0 Then Exit Sub   ' No movement, short-circuit
+   If Offs = 0 Then
+     If Me.SelLength = 0 Then
+       Exit Sub   ' No movement, short-circuit
+     End If
+   End If
   
   Select Case MoveType
   Case movecursor_Row
@@ -1330,7 +1334,7 @@ Private Function SelectionWillChange(ByVal OldSelStart As Long, ByVal OldSelLeng
   End If
 End Function
 
-Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long, Optional ByVal ReverseSelection As Boolean = False)
+Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long, Optional ByVal ReverseSelection As Boolean = False, Optional ByVal Redraw As Boolean = True)
   Dim OldSelStart As Long
   Dim OldSelLength As Long
   Dim OldCaretPos As Long
@@ -1374,10 +1378,12 @@ Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long
   
   CalcCoords CaretPos, CurRow, CurPos
   
-  EnsureVisible
-  
-  CaretInvertCounter = 0
-  W.Refresh
+  If Redraw Then
+    EnsureVisible
+    
+    CaretInvertCounter = 0
+    W.Refresh
+  End If
   
   RaiseEvent SelChanged(OldSelStart, OldSelLength, OldCaretPos)
 End Sub
