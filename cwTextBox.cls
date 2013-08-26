@@ -36,7 +36,7 @@ Private dx As Single, dy As Single, Alpha As Single, Zoom As Single, dxx As Sing
 Private mText$, mPassWordChar$, mMultiLine As Boolean, mMaxRowWidth As Single, mVisibleRows&, mCueBannerText As String
 Private RowsCharOffset() As Long, RowsCharCount() As Long, mRowCount As Long
 Private mSelStart&, mSelLength&, SelBegin&
-Private CaretPos&, CurRow&, CurPos&, CaretInvertCounter&
+Private mCaretPos&, CurRow&, CurPos&, CaretInvertCounter&
 Private ShiftDown As Boolean, BDown As Boolean
 Private mBorder As Boolean, mScrollBars As ScrollBarConstants
 Private mRowHeight&, mLastTextHeight As Long
@@ -44,6 +44,7 @@ Private mInnerSpace&, mAlignment As AlignmentConstants, mVCenter As Boolean
 Private mScrollerSize!, VSValue&, VSLargeChange&, VSMax&
 Private mLocked As Boolean
 Private mMaxLength As Long
+Private mLastUndoAction As eTextUndoAction
 
 Private WithEvents T As cTimer, WithEvents tCaret As cTimer
 Attribute T.VB_VarHelpID = -1
@@ -51,12 +52,13 @@ Attribute tCaret.VB_VarHelpID = -1
 Private WithEvents VScrollBar As cwVScrollBar, WithEvents HScrollBar As cwHScrollBar
 Attribute VScrollBar.VB_VarHelpID = -1
 Attribute HScrollBar.VB_VarHelpID = -1
+Private WithEvents UndoStack As cTextUndoStack
+Attribute UndoStack.VB_VarHelpID = -1
 
 Private InsideDraw As Boolean
 Private mUndoDepth As Byte, HScrollX&, HScrollMax&
 Private mAutoSelectAll As Boolean
 Private mHideSelection As Boolean
-
 Public UserdefinedHovering As Boolean
 
 Private WithEvents W As cWidgetBase
@@ -83,6 +85,8 @@ Private Sub Class_Initialize()
   W.MousePointer = IDC_IBEAM
   W.RuntimePropertiesCommaSeparated = "SelStart,SelLength,SelText,TopRow"
   mScrollerSize = Cairo.Theme.GetScrollerSize
+  
+  Set UndoStack = New cTextUndoStack
 End Sub
 
 Public Property Get Text$()
@@ -195,7 +199,7 @@ Public Property Get SelText$()
   If mSelLength Then SelText = Mid$(mText, mSelStart + 1, mSelLength)
 End Property
 Public Property Let SelText(ByVal NewValue$)
-  InsertText NewValue
+  InsertText NewValue, textundoaction_None ' Client operations to change text won't affect undo buffer
   W.Refresh
 End Property
 
@@ -386,6 +390,10 @@ Private Sub tCaret_Timer() 'only running, when focused
   End If
 End Sub
 
+Private Sub UndoStack_RequestTextBox(po_TextBox As cwTextBox)
+   Set po_TextBox = Me
+End Sub
+
 Private Sub VScrollBar_Change()
   VSValue = VScrollBar.Value
   W.Refresh
@@ -454,6 +462,7 @@ Private Sub W_KeyDown(KeyCode As Integer, Shift As Integer)
 Dim CtrlDown As Boolean
 Dim NewRow As Long
 Dim NewPos As Long
+Dim UndoItem As cTextUndoStackItem
 
   RaiseEvent KeyDown(KeyCode, Shift)
   ShiftDown = Shift And vbShiftMask
@@ -463,7 +472,7 @@ Dim NewPos As Long
   Select Case KeyCode
     Case vbKeyReturn: If mMultiLine Then InsertText vbCrLf
 
-    Case vbKeyDelete: If ShiftDown And mSelLength > 0 Then CopyText: DeleteText
+    Case vbKeyDelete: If ShiftDown And mSelLength > 0 Then CopyText: DeleteText , textundoaction_Cut
                       If Not ShiftDown Then DeleteText
     Case vbKeyUp: MoveCursor -1, movecursor_Row
     Case vbKeyDown: MoveCursor 1, movecursor_Row
@@ -522,14 +531,50 @@ Dim NewPos As Long
       MoveCursor NewPos - CaretPos
     
     Case vbKeyInsert: If CtrlDown Then CopyText Else If ShiftDown Then PasteText
-    Case vbKeyX: If CtrlDown And mSelLength > 0 Then CopyText: DeleteText
+    Case vbKeyX: If CtrlDown And mSelLength > 0 Then CopyText: DeleteText , textundoaction_Cut
     Case vbKeyC: If CtrlDown Then CopyText
     Case vbKeyV: If CtrlDown Then PasteText
     Case vbKeyA
       If CtrlDown Then
         Me.SelectAll
       End If
-
+      
+    Case vbKeyZ
+      If CtrlDown Then
+         ' Undo
+         Select Case mLastUndoAction
+         Case textundoaction_Type, textundoaction_Delete
+            UndoStack.AddUndoItem mLastUndoAction, Me.Text, Me.SelStart, Me.SelLength, Me.CaretPos < Me.SelStart
+            mLastUndoAction = textundoaction_None
+         End Select
+         
+         If UndoStack.UndoAvailable Then
+            Set UndoItem = UndoStack.Undo
+            
+            If UndoItem Is Nothing Then
+               Debug.Assert False
+            Else
+               Me.Text = UndoItem.Text
+               SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.ReverseSelection
+            End If
+         End If
+      End If
+    
+    Case vbKeyY
+      If CtrlDown Then
+        ' Redo
+        If UndoStack.RedoAvailable Then
+          Set UndoItem = UndoStack.Redo
+          
+          If UndoItem Is Nothing Then
+            Debug.Assert False
+          Else
+            Me.Text = UndoItem.Text
+            SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.ReverseSelection
+          End If
+        End If
+      End If
+      
     Case Else: Exit Sub
   End Select
   
@@ -554,7 +599,7 @@ Private Sub W_KeyUp(KeyCode As Integer, Shift As Integer)
   If KeyCode = vbKeyShift Then ShiftDown = False
 End Sub
 
-Private Sub InsertText(NewText$)
+Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = textundoaction_Type)
   Dim Buffer As String
     
   If mLocked Then Exit Sub
@@ -566,6 +611,11 @@ Private Sub InsertText(NewText$)
      RaiseEvent MaxLengthViolation
      Exit Sub
    End If
+  End If
+   
+  If UndoAction <> textundoaction_None Then
+    UndoStack.AddUndoItem textundoaction_Type, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart + Me.SelLength)
+    mLastUndoAction = textundoaction_Type
   End If
    
   mText = Left$(mText, mSelStart) & NewText & Mid$(mText, mSelStart + mSelLength + 1)
@@ -591,10 +641,19 @@ Private Sub PasteText()
   RaiseEvent BeforePaste(Text, Cancel)
   If Cancel Then Exit Sub
   
-  InsertText Text
+  InsertText Text, textundoaction_Paste
 End Sub
 
-Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean)
+Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean, Optional ByVal UndoAction As eTextUndoAction = textundoaction_Delete)
+  If Not ((UndoAction = textundoaction_Delete) Or _
+          (UndoAction = textundoaction_Cut)) Then
+    ' Unacceptable undo action, only Delete or Cut allowed
+    Err.Raise 5, , "Unsupported undo action for DeleteText: " & UndoAction
+  End If
+   
+  UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < (Me.SelStart + Me.SelLength))
+  mLastUndoAction = UndoAction
+  
   If mSelLength = 0 Then
     If ToTheLeft And mSelStart > 0 Then
       If Mid$(mText, mSelStart, 1) = vbLf Then
@@ -607,7 +666,7 @@ Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean)
     End If
   End If
   
-  InsertText ""
+  InsertText "", textundoaction_None
 End Sub
 
 Private Sub MoveCursor(ByVal Offs&, Optional ByVal MoveType As eMoveCursorType = movecursor_Char)
@@ -1319,6 +1378,14 @@ Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long
   
   CaretInvertCounter = 0
   W.Refresh
-      
+  
   RaiseEvent SelChanged(OldSelStart, OldSelLength, OldCaretPos)
 End Sub
+
+Friend Property Get CaretPos() As Long
+  CaretPos = m_CaretPos
+End Property
+
+Private Property Let CaretPos(ByVal Pos As Long)
+  m_CaretPos = Pos
+End Property
