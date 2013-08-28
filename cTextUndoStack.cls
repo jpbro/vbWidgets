@@ -83,17 +83,18 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
          
          Select Case lo_UndoItem.Action
          Case textundoaction_Type, textundoaction_Delete
-            ' The action is an extendable action
+            ' The previous action is an extendable action
             
             If lo_UndoItem.SelStart = p_SelStart + IIf(lo_UndoItem.Action = textundoaction_Delete, 1, -1) Then
-               ' The action is occuring at an extendable caret position (right before or after the last delete or insert respectively)
+               ' The action is occuring at an extendable caret position
+               ' (immediately before the last delete or after the last insert)
                l_ExtendAction = True
             End If
          End Select
       End If
    End If
 
-   ' Build the undo information object
+   ' Build the current undo information object
    Set lo_UndoItem = New cTextUndoStackItem
    With lo_UndoItem
       .Action = p_Action
@@ -106,21 +107,13 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
    If l_ExtendAction Then
       ' The new action is an extension of the previous action
       ' So keep it in memory, but don't add it to the undo stack yet
-      Debug.Print "Extending last action."
       Set mo_TempUndoItem = lo_UndoItem
    
    Else
-      ' The new action is independent of the previous action
+      ' The current action is independent of the previous action
+      Set mo_TempUndoItem = Nothing
       
-      If Not mo_TempUndoItem Is Nothing Then
-         ' Push the previous extended action onto the stack
-         Debug.Print "Adding " & mo_TempUndoItem.Action, mo_TempUndoItem.Text
-         mo_UndoStack.Add mo_TempUndoItem
-         Set mo_TempUndoItem = Nothing
-      End If
-      
-      ' Push the new action onto the stack
-      Debug.Print "Adding " & lo_UndoItem.Action, lo_UndoItem.Text
+      ' Push the current action onto the stack
       mo_UndoStack.Add lo_UndoItem
       ' Record the current undo index for future Undo/Redo requests
       m_UndoIndex = mo_UndoStack.Count - 1
@@ -130,8 +123,6 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
          mo_UndoStack.RemoveByIndex 0
       Loop
    End If
-   
-   Debug.Print "Undo stack count: " & mo_UndoStack.Count & ", UndoINdex: " & m_UndoIndex
 End Sub
 
 Public Function Undo() As cTextUndoStackItem
@@ -139,15 +130,11 @@ Public Function Undo() As cTextUndoStackItem
    ' Returns an undo information object if available
    ' Otherwise returns Nothing
    
-   Dim lo_TextBox As cwTextBox
-   Dim lo_UndoItem As cTextUndoStackItem
-   
-   Me.FlattenUndoStack
+   ' Add any lingering extendable undo action to the stack
+   FlattenUndoStack
    
    If m_UndoIndex <= 0 Then Exit Function
    If Not Me.UndoAvailable Then Exit Function
-   
-   Debug.Print "Undoing index " & m_UndoIndex - 1 & " of " & mo_UndoStack.Count - 1
    
    Set Undo = mo_UndoStack.ItemByIndex(m_UndoIndex - 1)
    m_UndoIndex = m_UndoIndex - 1
@@ -160,33 +147,29 @@ Public Function Redo() As cTextUndoStackItem
    
    If m_UndoIndex >= mo_UndoStack.Count - 1 Then Exit Function
    If Not Me.RedoAvailable Then Exit Function
+   If m_UndoIndex < 0 Then Debug.Assert False
    
    Set mo_TempUndoItem = Nothing
       
-   Debug.Print "Redoing index " & m_UndoIndex + 1 & " of " & mo_UndoStack.Count - 1
-   
    Set Redo = mo_UndoStack.ItemByIndex(m_UndoIndex + 1)
    m_UndoIndex = m_UndoIndex + 1
 End Function
 
 Public Function UndoAvailable() As Boolean
    ' Returns True if there is at least one undo information object in the stack in the undo direction
-   UndoAvailable = (m_UndoIndex < mo_UndoStack.Count)
-
-   Debug.Print "Undo Available: " & UndoAvailable
+   UndoAvailable = (m_UndoIndex >= 0) And (m_UndoIndex < mo_UndoStack.Count + IIf(mo_TempUndoItem Is Nothing, 0, 1))
 End Function
 
 Public Function RedoAvailable() As Boolean
    ' Returns True if there is at least one undo information object in the stack in the redo direction
-   RedoAvailable = (m_UndoIndex < mo_UndoStack.Count - 1)
-   
-   Debug.Print "Redo Available: " & RedoAvailable
+   RedoAvailable = (m_UndoIndex >= 0) And (m_UndoIndex < mo_UndoStack.Count + IIf(mo_TempUndoItem Is Nothing, -1, 0))
 End Function
 
 Public Sub Clear()
    ' Clears the undo stack
    m_UndoIndex = 0
    mo_UndoStack.RemoveAll
+   Set mo_TempUndoItem = Nothing
 End Sub
 
 Private Sub Class_Initialize()
@@ -195,10 +178,8 @@ Private Sub Class_Initialize()
    Me.MaxUndoLevels = 32  ' TODO: Determine an appropriate default value for the undo stack
 End Sub
 
-Public Sub FlattenUndoStack()
+Private Sub FlattenUndoStack()
    If mo_TempUndoItem Is Nothing Then Exit Sub
-   
-   Debug.Print "Adding " & mo_TempUndoItem.Action, mo_TempUndoItem.Text
    
    mo_UndoStack.Add mo_TempUndoItem
    Set mo_TempUndoItem = Nothing

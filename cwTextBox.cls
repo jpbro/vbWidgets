@@ -610,7 +610,8 @@ End Sub
 
 Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = textundoaction_Type)
   Dim Buffer As String
-    
+  Dim NewLength As Long
+  
   If mLocked Then Exit Sub
   If Len(NewText) = 0 And mSelLength = 0 Then Exit Sub
   
@@ -640,8 +641,6 @@ Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = 
   End If
    
   If UndoAction <> textundoaction_None Then
-'    AddLastUndoItemIfExtendable textundoaction_Delete
-    
     UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart + Me.SelLength)
     mLastUndoAction = UndoAction
   End If
@@ -673,37 +672,49 @@ Private Sub PasteText()
 End Sub
 
 Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean, Optional ByVal UndoAction As eTextUndoAction = textundoaction_Delete)
+  Dim NewSelStart As Long
+  Dim NewSelLength As Long
+  
   If Not ((UndoAction = textundoaction_Delete) Or _
           (UndoAction = textundoaction_Cut)) Then
     ' Unacceptable undo action, only Delete or Cut allowed
     Err.Raise 5, , "Unsupported undo action for DeleteText: " & UndoAction
   End If
        
-'  AddLastUndoItemIfExtendable textundoaction_Type
-       
   If mSelLength = 0 Then
     If ToTheLeft Then
       If mSelStart > 0 Then
         If Mid$(mText, mSelStart, 1) = vbLf Then
-          SetSelection mSelStart - 2, 2, , False
+          NewSelStart = mSelStart - 2
+          NewSelLength = 2
         Else
-          SetSelection mSelStart - 1, 1, , False
+          NewSelStart = mSelStart - 1
+          NewSelLength = 1
         End If
       Else
         Exit Sub
       End If
     Else
       If mSelStart < Len(mText) Then
-        If Mid$(mText, mSelStart + 1, 1) = vbCr Then mSelLength = 2 Else mSelLength = 1
+        NewSelStart = mSelStart
+        If Mid$(mText, mSelStart + 1, 1) = vbCr Then
+          NewSelLength = 2
+        Else
+          NewSelLength = 1
+        End If
       Else
         Exit Sub
       End If
     End If
+  Else
+    NewSelStart = mSelStart
+    NewSelLength = mSelLength
   End If
   
   UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < (Me.SelStart + Me.SelLength))
   mLastUndoAction = UndoAction
    
+  SetSelection NewSelStart, NewSelLength, , False
   InsertText "", textundoaction_None
 End Sub
 
