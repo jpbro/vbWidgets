@@ -52,7 +52,7 @@ Attribute tCaret.VB_VarHelpID = -1
 Private WithEvents VScrollBar As cwVScrollBar, WithEvents HScrollBar As cwHScrollBar
 Attribute VScrollBar.VB_VarHelpID = -1
 Attribute HScrollBar.VB_VarHelpID = -1
-Private WithEvents UndoStack As cTextUndoStack
+Private UndoStack As cTextUndoStack
 Attribute UndoStack.VB_VarHelpID = -1
 
 Private InsideDraw As Boolean
@@ -390,10 +390,6 @@ Private Sub tCaret_Timer() 'only running, when focused
   End If
 End Sub
 
-Private Sub UndoStack_RequestTextBox(po_TextBox As cwTextBox)
-   Set po_TextBox = Me
-End Sub
-
 Private Sub VScrollBar_Change()
   VSValue = VScrollBar.Value
   W.Refresh
@@ -541,23 +537,19 @@ Dim UndoItem As cTextUndoStackItem
       
     Case vbKeyZ
       If CtrlDown Then
-         ' Undo
-         Select Case mLastUndoAction
-         Case textundoaction_Type, textundoaction_Delete
-            UndoStack.AddUndoItem mLastUndoAction, Me.Text, Me.SelStart, Me.SelLength, Me.CaretPos < Me.SelStart
-            mLastUndoAction = textundoaction_None
-         End Select
+        ' Undo
+        AddLastUndoItemIfExtendable textundoaction_Type, textundoaction_Delete
          
-         If UndoStack.UndoAvailable Then
-            Set UndoItem = UndoStack.Undo
-            
-            If UndoItem Is Nothing Then
-               Debug.Assert False
-            Else
-               Me.Text = UndoItem.Text
-               SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.ReverseSelection
-            End If
-         End If
+        If UndoStack.UndoAvailable Then
+          Set UndoItem = UndoStack.Undo
+          
+          If UndoItem Is Nothing Then
+            Debug.Assert False
+          Else
+            Me.Text = UndoItem.Text
+            SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.ReverseSelection
+          End If
+        End If
       End If
     
     Case vbKeyY
@@ -599,6 +591,23 @@ Private Sub W_KeyUp(KeyCode As Integer, Shift As Integer)
   If KeyCode = vbKeyShift Then ShiftDown = False
 End Sub
 
+Private Sub AddLastUndoItemIfExtendable(ParamArray ExtendableUndoActions() As Variant)
+  Dim i As Long
+  
+  If UBound(ExtendableUndoActions) = -1 Then Err.Raise 5, , "At least one extendable undo action is required for testing."
+  
+  For i = LBound(ExtendableUndoActions) To UBound(ExtendableUndoActions)
+    If mLastUndoAction = ExtendableUndoActions(i) Then
+      Debug.Print "Extending last undo action."
+      UndoStack.AddUndoItem mLastUndoAction, Me.Text, Me.SelStart, Me.SelLength, Me.CaretPos < Me.SelStart
+      
+      Exit For
+    End If
+  Next i
+
+  mLastUndoAction = textundoaction_None
+End Sub
+
 Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = textundoaction_Type)
   Dim Buffer As String
     
@@ -606,16 +615,18 @@ Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = 
   If Len(NewText) = 0 And mSelLength = 0 Then Exit Sub
   
   If mMaxLength > 0 Then
-   If Len(NewText) + Len(mText) - mSelLength > mMaxLength Then
-     ' Can't insert text without violating MaxLength property value
-     RaiseEvent MaxLengthViolation
-     Exit Sub
-   End If
+    If Len(NewText) + Len(mText) - mSelLength > mMaxLength Then
+      ' Can't insert text without violating MaxLength property value
+      RaiseEvent MaxLengthViolation
+      Exit Sub
+    End If
   End If
    
   If UndoAction <> textundoaction_None Then
-    UndoStack.AddUndoItem textundoaction_Type, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart + Me.SelLength)
-    mLastUndoAction = textundoaction_Type
+'    AddLastUndoItemIfExtendable textundoaction_Delete
+    
+    UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart + Me.SelLength)
+    mLastUndoAction = UndoAction
   End If
    
   mText = Left$(mText, mSelStart) & NewText & Mid$(mText, mSelStart + mSelLength + 1)
@@ -650,22 +661,32 @@ Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean, Optional ByVal UndoA
     ' Unacceptable undo action, only Delete or Cut allowed
     Err.Raise 5, , "Unsupported undo action for DeleteText: " & UndoAction
   End If
-   
-  UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < (Me.SelStart + Me.SelLength))
-  mLastUndoAction = UndoAction
-  
+       
+'  AddLastUndoItemIfExtendable textundoaction_Type
+       
   If mSelLength = 0 Then
-    If ToTheLeft And mSelStart > 0 Then
-      If Mid$(mText, mSelStart, 1) = vbLf Then
-        SetSelection mSelStart - 2, 2, , False
+    If ToTheLeft Then
+      If mSelStart > 0 Then
+        If Mid$(mText, mSelStart, 1) = vbLf Then
+          SetSelection mSelStart - 2, 2, , False
+        Else
+          SetSelection mSelStart - 1, 1, , False
+        End If
       Else
-        SetSelection mSelStart - 1, 1, , False
+        Exit Sub
       End If
-    ElseIf Not ToTheLeft And mSelStart < Len(mText) Then
-      If Mid$(mText, mSelStart + 1, 1) = vbCr Then mSelLength = 2 Else mSelLength = 1
+    Else
+      If mSelStart < Len(mText) Then
+        If Mid$(mText, mSelStart + 1, 1) = vbCr Then mSelLength = 2 Else mSelLength = 1
+      Else
+        Exit Sub
+      End If
     End If
   End If
   
+  UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < (Me.SelStart + Me.SelLength))
+  mLastUndoAction = UndoAction
+   
   InsertText "", textundoaction_None
 End Sub
 

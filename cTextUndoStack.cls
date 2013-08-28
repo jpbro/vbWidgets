@@ -19,10 +19,7 @@ Public Enum eTextUndoAction
    textundoaction_Delete   ' Text deletion operation
    textundoaction_Cut   ' A clipboard cut operation
    textundoaction_Paste ' A clipboard paste operation
-   textundoaction_Undo  ' An undo operation
 End Enum
-
-Public Event RequestTextBox(po_TextBox As cwTextBox)
 
 Private mo_UndoStack As vbRichClient5.cCollection
 Private mo_TempUndoItem As cTextUndoStackItem
@@ -65,10 +62,10 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
    
    ' Clear Redo side of Stack
    If m_UndoIndex >= 0 Then
-   For i = m_UndoIndex + 1 To mo_UndoStack.Count - 1
-      mo_UndoStack.RemoveByIndex i
-   Next i
-   m_UndoIndex = mo_UndoStack.Count - 1
+      For i = m_UndoIndex + 1 To mo_UndoStack.Count - 1
+         mo_UndoStack.RemoveByIndex i
+      Next i
+      m_UndoIndex = mo_UndoStack.Count - 1
    End If
       
    ' Check for previous extendable action (typing or deleting)
@@ -109,6 +106,7 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
    If l_ExtendAction Then
       ' The new action is an extension of the previous action
       ' So keep it in memory, but don't add it to the undo stack yet
+      Debug.Print "Extending last action."
       Set mo_TempUndoItem = lo_UndoItem
    
    Else
@@ -116,10 +114,13 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
       
       If Not mo_TempUndoItem Is Nothing Then
          ' Push the previous extended action onto the stack
+         Debug.Print "Adding " & mo_TempUndoItem.Action, mo_TempUndoItem.Text
          mo_UndoStack.Add mo_TempUndoItem
+         Set mo_TempUndoItem = Nothing
       End If
       
       ' Push the new action onto the stack
+      Debug.Print "Adding " & lo_UndoItem.Action, lo_UndoItem.Text
       mo_UndoStack.Add lo_UndoItem
       ' Record the current undo index for future Undo/Redo requests
       m_UndoIndex = mo_UndoStack.Count - 1
@@ -129,6 +130,8 @@ Public Sub AddUndoItem(ByVal p_Action As eTextUndoAction, ByVal p_Text As String
          mo_UndoStack.RemoveByIndex 0
       Loop
    End If
+   
+   Debug.Print "Undo stack count: " & mo_UndoStack.Count & ", UndoINdex: " & m_UndoIndex
 End Sub
 
 Public Function Undo() As cTextUndoStackItem
@@ -139,30 +142,15 @@ Public Function Undo() As cTextUndoStackItem
    Dim lo_TextBox As cwTextBox
    Dim lo_UndoItem As cTextUndoStackItem
    
-   If Not Me.UndoAvailable Then Exit Function
-   If m_UndoIndex < 0 Then m_UndoIndex = 0
-   
-   Debug.Print "Undoing index " & m_UndoIndex
-   
-'   If m_UndoIndex = mo_UndoStack.Count - 1 Then
-'      RaiseEvent RequestTextBox(lo_TextBox)
-'
-'      Set lo_UndoItem = New cTextUndoStackItem
-'      With lo_UndoItem
-'         .Action = textundoaction_Undo
-'         .ReverseSelection = lo_TextBox.CaretPos < lo_TextBox.SelStart
-'         .SelLength = lo_TextBox.SelLength
-'         .SelStart = lo_TextBox.SelStart
-'         .Text = lo_TextBox.Text
-'      End With
-'
-'      mo_UndoStack.Add lo_UndoItem, , , m_UndoIndex
-'   End If
-
    Me.FlattenUndoStack
    
+   If m_UndoIndex <= 0 Then Exit Function
+   If Not Me.UndoAvailable Then Exit Function
+   
+   Debug.Print "Undoing index " & m_UndoIndex - 1 & " of " & mo_UndoStack.Count - 1
+   
+   Set Undo = mo_UndoStack.ItemByIndex(m_UndoIndex - 1)
    m_UndoIndex = m_UndoIndex - 1
-   Set Undo = mo_UndoStack.ItemByIndex(m_UndoIndex)
 End Function
 
 Public Function Redo() As cTextUndoStackItem
@@ -170,14 +158,14 @@ Public Function Redo() As cTextUndoStackItem
    ' Returns an undo information object if available
    ' Otherwise returns Nothing
    
+   If m_UndoIndex >= mo_UndoStack.Count - 1 Then Exit Function
    If Not Me.RedoAvailable Then Exit Function
-   If m_UndoIndex < 0 Then m_UndoIndex = 0
    
    Set mo_TempUndoItem = Nothing
       
-   Debug.Print "Redoing index " & m_UndoIndex
-   Set Redo = mo_UndoStack.ItemByIndex(m_UndoIndex)
+   Debug.Print "Redoing index " & m_UndoIndex + 1 & " of " & mo_UndoStack.Count - 1
    
+   Set Redo = mo_UndoStack.ItemByIndex(m_UndoIndex + 1)
    m_UndoIndex = m_UndoIndex + 1
 End Function
 
@@ -208,9 +196,12 @@ Private Sub Class_Initialize()
 End Sub
 
 Public Sub FlattenUndoStack()
-   If Not mo_TempUndoItem Is Nothing Then
-      mo_UndoStack.Add mo_TempUndoItem, , , m_UndoIndex
-      m_UndoIndex = m_UndoIndex + 1
-      Set mo_TempUndoItem = Nothing
-   End If
+   If mo_TempUndoItem Is Nothing Then Exit Sub
+   
+   Debug.Print "Adding " & mo_TempUndoItem.Action, mo_TempUndoItem.Text
+   
+   mo_UndoStack.Add mo_TempUndoItem
+   Set mo_TempUndoItem = Nothing
+
+   m_UndoIndex = mo_UndoStack.Count - 1
 End Sub
