@@ -14,7 +14,7 @@ Attribute VB_Exposed = False
 Option Explicit
 
 Public Action As eTextUndoAction
-Public Text As String
 Public SelStart As Long
 Public SelLength As Long
-Public ReverseSelection As Boolean
+Public SelBackwards As Boolean
+Public Text As String

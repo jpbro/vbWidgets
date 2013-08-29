@@ -29,7 +29,7 @@ Event KeyUp(KeyCode As Integer, Shift As Integer)
 Event Validate(Cancel As Boolean)
 Event MaxLengthViolation() ' An insert operation was cancelled because it would violate the MaxLength property value
 Event BeforePaste(TextToPaste As String, Cancel As Boolean)
-Event BeforeSelChange(NewSelStart As Long, NewSelLength As Long, ReverseSelection As Boolean, Cancel As Boolean)
+Event BeforeSelChange(NewSelStart As Long, NewSelLength As Long, SelBackwards As Boolean, Cancel As Boolean)
 Event SelChanged(ByVal OldSelStart As Long, ByVal OldSelLength As Long, ByVal OldCaretPosition As Long)
 
 Private dx As Single, dy As Single, Alpha As Single, Zoom As Single, dxx As Single, dyy As Single
@@ -44,7 +44,6 @@ Private mInnerSpace&, mAlignment As AlignmentConstants, mVCenter As Boolean
 Private mScrollerSize!, VSValue&, VSLargeChange&, VSMax&
 Private mLocked As Boolean
 Private mMaxLength As Long
-Private mLastUndoAction As eTextUndoAction
 
 Private WithEvents T As cTimer, WithEvents tCaret As cTimer
 Attribute T.VB_VarHelpID = -1
@@ -54,6 +53,7 @@ Attribute VScrollBar.VB_VarHelpID = -1
 Attribute HScrollBar.VB_VarHelpID = -1
 Private UndoStack As cTextUndoStack
 Attribute UndoStack.VB_VarHelpID = -1
+Private QueuedUndoItem As cTextUndoStackItem
 
 Private InsideDraw As Boolean
 Private mUndoDepth As Byte, HScrollX&, HScrollMax&
@@ -94,6 +94,7 @@ Public Property Get Text$()
 End Property
 Public Property Let Text(ByVal NewValue$)
   If NewValue = mText Then Exit Property
+  
   mText = NewValue
   mSelStart = 0
   mSelLength = 0
@@ -538,7 +539,10 @@ Dim UndoItem As cTextUndoStackItem
     Case vbKeyZ
       If CtrlDown Then
         ' Undo
-        AddLastUndoItemIfExtendable textundoaction_Type, textundoaction_Delete
+        If Not QueuedUndoItem Is Nothing Then
+          UndoStack.AddUndoItem QueuedUndoItem
+          Set QueuedUndoItem = Nothing
+        End If
          
         If UndoStack.UndoAvailable Then
           Set UndoItem = UndoStack.Undo
@@ -547,7 +551,7 @@ Dim UndoItem As cTextUndoStackItem
             Debug.Assert False
           Else
             Me.Text = UndoItem.Text
-            SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.ReverseSelection
+            SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.SelBackwards, , False
           End If
         End If
       End If
@@ -562,7 +566,7 @@ Dim UndoItem As cTextUndoStackItem
             Debug.Assert False
           Else
             Me.Text = UndoItem.Text
-            SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.ReverseSelection
+            SetSelection UndoItem.SelStart, UndoItem.SelLength, UndoItem.SelBackwards, , False
           End If
         End If
       End If
@@ -589,23 +593,6 @@ End Sub
 Private Sub W_KeyUp(KeyCode As Integer, Shift As Integer)
   RaiseEvent KeyUp(KeyCode, Shift)
   If KeyCode = vbKeyShift Then ShiftDown = False
-End Sub
-
-Private Sub AddLastUndoItemIfExtendable(ParamArray ExtendableUndoActions() As Variant)
-  Dim i As Long
-  
-  If UBound(ExtendableUndoActions) = -1 Then Err.Raise 5, , "At least one extendable undo action is required for testing."
-  
-  For i = LBound(ExtendableUndoActions) To UBound(ExtendableUndoActions)
-    If mLastUndoAction = ExtendableUndoActions(i) Then
-      Debug.Print "Extending last undo action."
-      UndoStack.AddUndoItem mLastUndoAction, Me.Text, Me.SelStart, Me.SelLength, Me.CaretPos < Me.SelStart
-      
-      Exit For
-    End If
-  Next i
-
-  mLastUndoAction = textundoaction_None
 End Sub
 
 Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = textundoaction_Type)
@@ -642,13 +629,17 @@ Private Sub InsertText(NewText$, Optional ByVal UndoAction As eTextUndoAction = 
   End If
    
   If UndoAction <> textundoaction_None Then
-    UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart + Me.SelLength)
-    mLastUndoAction = UndoAction
+    UndoStack.AddUndoItem UndoStack.CreateUndoItem(UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart))
   End If
    
   mText = Left$(mText, mSelStart) & NewText & Mid$(mText, mSelStart + mSelLength + 1)
   CalcRows
   SetSelection mSelStart + Len(NewText), 0
+  
+  If UndoAction <> textundoaction_None Then
+    Set QueuedUndoItem = UndoStack.CreateUndoItem(UndoAction, Me.Text, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart))
+  End If
+  
   RaiseEvent Change
   W.RaiseBubblingEvent Me, "Change"
 End Sub
@@ -715,11 +706,12 @@ Private Sub DeleteText(Optional ByVal ToTheLeft As Boolean, Optional ByVal UndoA
     NewSelLength = mSelLength
   End If
   
-  UndoStack.AddUndoItem UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < (Me.SelStart + Me.SelLength))
-  mLastUndoAction = UndoAction
+  UndoStack.AddUndoItem UndoStack.CreateUndoItem(UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart))
    
   SetSelection NewSelStart, NewSelLength, , False
   InsertText "", textundoaction_None
+
+  Set QueuedUndoItem = UndoStack.CreateUndoItem(UndoAction, mText, Me.SelStart, Me.SelLength, (CaretPos < Me.SelStart))
 End Sub
 
 Private Sub MoveCursor(ByVal Offs&, Optional ByVal MoveType As eMoveCursorType = movecursor_Char)
@@ -1370,13 +1362,13 @@ Private Sub NormalizeSelectionIndexes(ZeroBasedStartIndex As Long, Length As Lon
   If ZeroBasedStartIndex + Length > Len(mText) Then Length = Len(mText) - ZeroBasedStartIndex
 End Sub
 
-Private Function SelectionWillChange(ByVal OldSelStart As Long, ByVal OldSelLength As Long, ByVal OldCaretPos As Long, ByVal NewSelStart As Long, ByVal NewSelLength As Long, ByVal ReverseSelection As Boolean) As Boolean
+Private Function SelectionWillChange(ByVal OldSelStart As Long, ByVal OldSelLength As Long, ByVal OldCaretPos As Long, ByVal NewSelStart As Long, ByVal NewSelLength As Long, ByVal SelBackwards As Boolean) As Boolean
   SelectionWillChange = True ' Assume selection will change
   
   If (OldSelStart = NewSelStart) Then
     If (OldSelLength = NewSelLength) Then
-      If (((OldCaretPos = OldSelStart) And ReverseSelection) Or _
-         ((OldCaretPos = OldSelStart + OldSelLength) And Not ReverseSelection)) Then
+      If (((OldCaretPos = OldSelStart) And SelBackwards) Or _
+         ((OldCaretPos = OldSelStart + OldSelLength) And Not SelBackwards)) Then
          
         ' Select will not change
         SelectionWillChange = False
@@ -1385,7 +1377,7 @@ Private Function SelectionWillChange(ByVal OldSelStart As Long, ByVal OldSelLeng
   End If
 End Function
 
-Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long, Optional ByVal ReverseSelection As Boolean = False, Optional ByVal Redraw As Boolean = True)
+Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long, Optional ByVal SelBackwards As Boolean = False, Optional ByVal Redraw As Boolean = True, Optional ByVal AllowCancellation As Boolean = True)
   Dim OldSelStart As Long
   Dim OldSelLength As Long
   Dim OldCaretPos As Long
@@ -1401,28 +1393,30 @@ Private Sub SetSelection(ByVal ZeroBasedStartIndex As Long, ByVal Length As Long
   ' Normalize the passed selection indexes to fit within text boundaries
   NormalizeSelectionIndexes ZeroBasedStartIndex, Length
   ' Test if selection will actually change based on passed values - if not, then short-circuit
-  If Not SelectionWillChange(OldSelStart, OldSelLength, OldCaretPos, ZeroBasedStartIndex, Length, ReverseSelection) Then
+  If Not SelectionWillChange(OldSelStart, OldSelLength, OldCaretPos, ZeroBasedStartIndex, Length, SelBackwards) Then
     Exit Sub
   End If
   
   ' Selection will be changed based on currently passed values
   ' Give client a chance to modify/cancel the selection
-  RaiseEvent BeforeSelChange(ZeroBasedStartIndex, Length, ReverseSelection, Cancel)
-  If Cancel Then Exit Sub
-  
-  W.RaiseBubblingEvent Me, "BeforeSelChange", ZeroBasedStartIndex, Length, ReverseSelection, Cancel
-  If Cancel Then Exit Sub
+  If AllowCancellation Then
+    RaiseEvent BeforeSelChange(ZeroBasedStartIndex, Length, SelBackwards, Cancel)
+    If Cancel Then Exit Sub
+   
+    W.RaiseBubblingEvent Me, "BeforeSelChange", ZeroBasedStartIndex, Length, SelBackwards, Cancel
+    If Cancel Then Exit Sub
+  End If
   
   ' Renormalize and retest for selection change in case client changed ByRef variables
   NormalizeSelectionIndexes ZeroBasedStartIndex, Length
-  If Not SelectionWillChange(OldSelStart, OldSelLength, OldCaretPos, ZeroBasedStartIndex, Length, ReverseSelection) Then
+  If Not SelectionWillChange(OldSelStart, OldSelLength, OldCaretPos, ZeroBasedStartIndex, Length, SelBackwards) Then
     Exit Sub
   End If
   
   mSelStart = ZeroBasedStartIndex
   mSelLength = Length
   
-  If ReverseSelection Then
+  If SelBackwards Then
     CaretPos = mSelStart
     SelBegin = mSelStart + mSelLength
   Else
